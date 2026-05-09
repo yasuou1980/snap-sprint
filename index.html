@@ -900,6 +900,9 @@
       });
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       state.audioCtx = new AudioCtx();
+      if (state.audioCtx.state === 'suspended') {
+        try { await state.audioCtx.resume(); } catch (_) {}
+      }
       const source = state.audioCtx.createMediaStreamSource(state.audioStream);
       state.analyser = state.audioCtx.createAnalyser();
       state.analyser.fftSize = 1024;
@@ -1041,6 +1044,7 @@
         state.settleAfter = now + 800;
         setStatus('running');
         showCountdown('GO!');
+        playStartBeep();
       }
     } else if (state.mode === 'running') {
       const elapsed = (now - state.startTime) / 1000;
@@ -1063,6 +1067,24 @@
     countdownText.textContent = text;
     countdown.classList.add('show');
     setTimeout(() => countdown.classList.remove('show'), 500);
+  };
+
+  const playStartBeep = () => {
+    if (!state.audioCtx) return;
+    const ctx = state.audioCtx;
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+    const t0 = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(1500, t0);
+    gain.gain.setValueAtTime(0, t0);
+    gain.gain.linearRampToValueAtTime(0.9, t0 + 0.005);
+    gain.gain.setValueAtTime(0.9, t0 + 0.30);
+    gain.gain.linearRampToValueAtTime(0, t0 + 0.35);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(t0);
+    osc.stop(t0 + 0.36);
   };
 
   const finishRun = () => {
@@ -1283,6 +1305,7 @@
     state.prevFrame = null;
     setStatus('running');
     showCountdown('GO!');
+    playStartBeep();
   });
 
   saveBtn.addEventListener('click', () => {
