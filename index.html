@@ -754,6 +754,7 @@
     <div class="button-row">
       <button id="armBtn" class="primary">準備</button>
       <button id="manualStartBtn">スタート</button>
+      <button id="saveBtn" disabled>📷 保存</button>
       <button id="resetBtn">リセット</button>
     </div>
   </div>
@@ -800,6 +801,7 @@
   const bigStatusTitle = $('bigStatusTitle');
   const bigStatusSub = $('bigStatusSub');
   const manualStartBtn = $('manualStartBtn');
+  const saveBtn = $('saveBtn');
   const historyEl = $('history');
   const countdown = $('countdown');
   const countdownText = $('countdownText');
@@ -810,6 +812,7 @@
     startTime: 0,
     finishTime: 0,
     currentRace: [], // finish times for the in-progress race
+    savedRace: null, // { times, snapshot } for "save image" button
     history: [], // array of races, each is { times: [...] }
     rafId: null,
     audioCtx: null,
@@ -1073,7 +1076,106 @@
     const fastest = Math.min(...state.currentRace);
     timerValue.textContent = fastest.toFixed(3);
     addRaceToHistory(state.currentRace.slice());
+    state.savedRace = {
+      times: state.currentRace.slice(),
+      snapshot: captureFrame(),
+      timestamp: new Date(),
+    };
+    updateSaveButton();
     if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+  };
+
+  const captureFrame = () => {
+    if (!video.videoWidth) return null;
+    const c = document.createElement('canvas');
+    c.width = video.videoWidth;
+    c.height = video.videoHeight;
+    c.getContext('2d').drawImage(video, 0, 0);
+    return c;
+  };
+
+  const updateSaveButton = () => {
+    saveBtn.disabled = !state.savedRace;
+  };
+
+  const composeResultCanvas = () => {
+    if (!state.savedRace) return null;
+    const { times, snapshot, timestamp } = state.savedRace;
+    const base = snapshot;
+    const c = document.createElement('canvas');
+    c.width = base.width;
+    c.height = base.height;
+    const cx = c.getContext('2d');
+    cx.drawImage(base, 0, 0);
+
+    const w = c.width, h = c.height;
+    const fontSize = Math.round(h * 0.05);
+    const lineH = Math.round(fontSize * 1.4);
+    const padding = Math.round(h * 0.035);
+    const titleH = Math.round(fontSize * 1.2);
+    const dateH = Math.round(fontSize * 0.6);
+    const panelH = padding * 2 + titleH + dateH + lineH * times.length + Math.round(fontSize * 0.4);
+
+    const grad = cx.createLinearGradient(0, h - panelH, 0, h);
+    grad.addColorStop(0, 'rgba(0,0,0,0)');
+    grad.addColorStop(0.25, 'rgba(0,0,0,0.7)');
+    grad.addColorStop(1, 'rgba(0,0,0,0.92)');
+    cx.fillStyle = grad;
+    cx.fillRect(0, h - panelH, w, panelH);
+
+    const top = h - panelH + padding;
+    cx.fillStyle = '#ffd60a';
+    cx.font = `900 ${titleH}px -apple-system, "Helvetica Neue", sans-serif`;
+    cx.textBaseline = 'top';
+    cx.textAlign = 'left';
+    cx.fillText('50m走', padding, top);
+
+    cx.font = `500 ${dateH}px -apple-system, "Helvetica Neue", sans-serif`;
+    cx.fillStyle = 'rgba(255,255,255,0.85)';
+    cx.textAlign = 'right';
+    const ts = timestamp || new Date();
+    const dateStr = `${ts.getFullYear()}/${String(ts.getMonth()+1).padStart(2,'0')}/${String(ts.getDate()).padStart(2,'0')} ${String(ts.getHours()).padStart(2,'0')}:${String(ts.getMinutes()).padStart(2,'0')}`;
+    cx.fillText(dateStr, w - padding, top + Math.round(titleH * 0.3));
+
+    cx.textAlign = 'left';
+    cx.font = `bold ${fontSize}px "SF Mono", Menlo, monospace`;
+    times.forEach((t, idx) => {
+      const y = top + titleH + Math.round(fontSize * 0.6) + lineH * idx;
+      cx.fillStyle = '#ffd60a';
+      cx.fillText(`${idx + 1}着`, padding, y);
+      cx.fillStyle = '#ffffff';
+      cx.fillText(`${t.toFixed(3)}s`, padding + Math.round(fontSize * 3.2), y);
+    });
+
+    return c;
+  };
+
+  const saveResult = async () => {
+    const canvas = composeResultCanvas();
+    if (!canvas) return;
+    const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.92));
+    if (!blob) return;
+    const ts = state.savedRace.timestamp;
+    const stamp = `${ts.getFullYear()}${String(ts.getMonth()+1).padStart(2,'0')}${String(ts.getDate()).padStart(2,'0')}-${String(ts.getHours()).padStart(2,'0')}${String(ts.getMinutes()).padStart(2,'0')}${String(ts.getSeconds()).padStart(2,'0')}`;
+    const filename = `sprint-${stamp}.jpg`;
+    const file = new File([blob], filename, { type: 'image/jpeg' });
+
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], title: '50m走 結果' });
+        return;
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+      }
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
   };
 
   const addRaceToHistory = (times) => {
@@ -1116,6 +1218,8 @@
       timerValue.textContent = '0.000';
       timerValue.classList.remove('finished');
       state.currentRace = [];
+      state.savedRace = null;
+      updateSaveButton();
       renderCurrentRace();
       state.settleAfter = performance.now() + 500;
       state.prevFrame = null;
@@ -1132,6 +1236,8 @@
   resetBtn.addEventListener('click', () => {
     state.history = [];
     state.currentRace = [];
+    state.savedRace = null;
+    updateSaveButton();
     renderHistory();
     renderCurrentRace();
     timerValue.textContent = '0.000';
@@ -1141,6 +1247,8 @@
 
   manualStartBtn.addEventListener('click', () => {
     state.currentRace = [];
+    state.savedRace = null;
+    updateSaveButton();
     renderCurrentRace();
     timerValue.classList.remove('finished');
     state.startTime = performance.now();
@@ -1148,6 +1256,10 @@
     state.prevFrame = null;
     setStatus('running');
     showCountdown('GO!');
+  });
+
+  saveBtn.addEventListener('click', () => {
+    saveResult();
   });
 
   let wakeLock = null;
