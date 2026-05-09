@@ -891,24 +891,12 @@
       video.srcObject = state.videoStream;
       await video.play();
 
-      state.audioStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
-        }
-      });
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       state.audioCtx = new AudioCtx();
       if (state.audioCtx.state === 'suspended') {
         try { await state.audioCtx.resume(); } catch (_) {}
       }
-      const source = state.audioCtx.createMediaStreamSource(state.audioStream);
-      state.analyser = state.audioCtx.createAnalyser();
-      state.analyser.fftSize = 1024;
-      state.analyser.smoothingTimeConstant = 0;
-      source.connect(state.analyser);
-      state.audioData = new Uint8Array(state.analyser.fftSize);
+      await acquireMic();
 
       resizeCanvas();
       window.addEventListener('resize', resizeCanvas);
@@ -1087,6 +1075,41 @@
     osc.stop(t0 + 0.36);
   };
 
+  const releaseMic = () => {
+    if (state.audioStream) {
+      state.audioStream.getTracks().forEach(t => t.stop());
+      state.audioStream = null;
+    }
+    if (state.analyser) {
+      try { state.analyser.disconnect(); } catch (_) {}
+      state.analyser = null;
+    }
+  };
+
+  async function acquireMic() {
+    if (state.audioStream) return;
+    try {
+      state.audioStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        }
+      });
+      if (state.audioCtx.state === 'suspended') {
+        try { await state.audioCtx.resume(); } catch (_) {}
+      }
+      const source = state.audioCtx.createMediaStreamSource(state.audioStream);
+      state.analyser = state.audioCtx.createAnalyser();
+      state.analyser.fftSize = 1024;
+      state.analyser.smoothingTimeConstant = 0;
+      source.connect(state.analyser);
+      state.audioData = new Uint8Array(state.analyser.fftSize);
+    } catch (e) {
+      console.error('mic acquire failed', e);
+    }
+  }
+
   const finishRun = () => {
     setStatus('finished');
     const fastest = Math.min(...state.currentRace.map(r => r.time));
@@ -1262,7 +1285,7 @@
     });
   };
 
-  armBtn.addEventListener('click', () => {
+  armBtn.addEventListener('click', async () => {
     if (state.mode === 'idle' || state.mode === 'finished') {
       timerValue.textContent = '0.000';
       timerValue.classList.remove('finished');
@@ -1270,6 +1293,7 @@
       state.savedRace = null;
       updateSaveButton();
       renderCurrentRace();
+      if (!state.audioStream) await acquireMic();
       state.settleAfter = performance.now() + 500;
       state.prevFrame = null;
       setStatus('armed');
@@ -1294,12 +1318,15 @@
     setStatus('idle');
   });
 
-  manualStartBtn.addEventListener('click', () => {
+  manualStartBtn.addEventListener('click', async () => {
     state.currentRace = [];
     state.savedRace = null;
     updateSaveButton();
     renderCurrentRace();
     timerValue.classList.remove('finished');
+    // Release mic so iOS routes audio output to loud speaker, then beep.
+    releaseMic();
+    await new Promise(r => setTimeout(r, 60));
     state.startTime = performance.now();
     state.settleAfter = state.startTime + 800;
     state.prevFrame = null;
