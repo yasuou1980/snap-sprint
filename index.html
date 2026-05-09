@@ -57,36 +57,14 @@
     pointer-events: none;
   }
 
-  .status-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    background: var(--panel);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    border: 1px solid var(--border);
-    padding: 8px 14px;
-    border-radius: 999px;
-    font-size: 13px;
-    font-weight: 600;
-    letter-spacing: 0.5px;
-  }
-
-  .top-bar-right {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    pointer-events: auto;
-  }
-
   .count-chip {
     background: var(--panel);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
     border: 1px solid var(--border);
-    padding: 8px 14px;
+    padding: 0 16px;
     border-radius: 999px;
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 700;
     letter-spacing: 0.5px;
     color: var(--text);
@@ -97,29 +75,13 @@
     height: 40px;
     font-family: inherit;
     cursor: pointer;
+    pointer-events: auto;
   }
   .count-chip #countLabel {
     color: var(--accent2);
-    font-size: 16px;
+    font-size: 18px;
     font-weight: 900;
     margin: 0 2px;
-  }
-
-  .status-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--dim);
-    transition: background 0.2s;
-  }
-
-  .status-dot.ready { background: var(--accent2); animation: pulse 1.5s infinite; }
-  .status-dot.armed { background: var(--accent); animation: pulse 0.8s infinite; }
-  .status-dot.running { background: var(--ok); animation: pulse 0.4s infinite; }
-
-  @keyframes pulse {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50% { opacity: 0.6; transform: scale(1.2); }
   }
 
   /* Center timer display */
@@ -690,16 +652,10 @@
 
   <!-- Top status -->
   <div class="top-bar">
-    <div class="status-pill">
-      <div class="status-dot" id="statusDot"></div>
-      <span id="statusText">待機中</span>
-    </div>
-    <div class="top-bar-right">
-      <button class="count-chip" id="countChip" aria-label="runner count">
-        <span>👥</span><span id="countLabel">1</span><span>人</span>
-      </button>
-      <button class="icon-btn" id="settingsBtn" aria-label="settings">⚙</button>
-    </div>
+    <button class="count-chip" id="countChip" aria-label="runner count">
+      <span>👥</span><span id="countLabel">1</span><span>人</span>
+    </button>
+    <button class="icon-btn" id="settingsBtn" aria-label="settings">⚙</button>
   </div>
 
   <!-- Settings panel -->
@@ -808,8 +764,6 @@
   const video = $('video');
   const canvas = $('canvas');
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  const statusDot = $('statusDot');
-  const statusText = $('statusText');
   const timerValue = $('timerValue');
   const timerLabel = $('timerLabel');
   const goalLine = $('goalLine');
@@ -976,12 +930,10 @@
 
   const setStatus = (mode) => {
     state.mode = mode;
-    statusDot.className = 'status-dot';
     armBtn.classList.remove('armed');
     bigStatus.className = 'big-status';
     timerDisplay.classList.toggle('dim', mode === 'idle' || mode === 'armed');
     if (mode === 'idle') {
-      statusText.textContent = '待機中';
       armBtn.textContent = '準備';
       armBtn.classList.add('primary');
       timerLabel.textContent = 'SECONDS';
@@ -990,8 +942,6 @@
       bigStatusSub.textContent = '準備で手拍子検知 ／ スタートで手動開始';
       bigStatus.classList.add('show', 'idle');
     } else if (mode === 'armed') {
-      statusDot.classList.add('armed');
-      statusText.textContent = '手拍子待ち…';
       armBtn.textContent = 'キャンセル';
       armBtn.classList.add('armed');
       timerLabel.textContent = 'WAITING';
@@ -999,13 +949,9 @@
       bigStatusSub.textContent = '音で自動 ／ スタートで強制';
       bigStatus.classList.add('show', 'armed');
     } else if (mode === 'running') {
-      statusDot.classList.add('running');
-      statusText.textContent = '計測中';
       armBtn.textContent = '中断';
       timerLabel.textContent = 'RUNNING';
     } else if (mode === 'finished') {
-      statusDot.classList.add('ready');
-      statusText.textContent = '完走';
       armBtn.textContent = '次の試行';
       armBtn.classList.add('primary');
       timerLabel.textContent = 'FINISHED';
@@ -1148,13 +1094,12 @@
   const composeResultCanvases = () => {
     if (!state.savedRace) return [];
     const { items, timestamp } = state.savedRace;
-    const total = items.length;
     return items.map((item, idx) =>
-      composeOneCanvas(item.snapshot, idx + 1, item.time, total, timestamp)
+      composeOneCanvas(item.snapshot, idx + 1, items, timestamp)
     ).filter(Boolean);
   };
 
-  const composeOneCanvas = (snapshot, rank, time, total, timestamp) => {
+  const composeOneCanvas = (snapshot, rank, allItems, timestamp) => {
     if (!snapshot) return null;
     const c = document.createElement('canvas');
     c.width = snapshot.width;
@@ -1163,30 +1108,39 @@
     cx.drawImage(snapshot, 0, 0);
 
     const w = c.width, h = c.height;
-    const titleFont = Math.round(h * 0.07);
-    const timeFont = Math.round(h * 0.13);
-    const dateFont = Math.round(h * 0.03);
-    const padding = Math.round(h * 0.04);
-    const panelH = padding * 2 + titleFont + timeFont + Math.round(h * 0.02);
+    const total = allItems.length;
+    const time = allItems[rank - 1].time;
 
-    const grad = cx.createLinearGradient(0, h - panelH * 1.4, 0, h);
+    const titleFont = Math.round(h * 0.06);
+    const timeFont = Math.round(h * 0.13);
+    const otherFont = Math.round(h * 0.038);
+    const dateFont = Math.round(h * 0.028);
+    const padding = Math.round(h * 0.035);
+    const otherLineH = Math.round(otherFont * 1.4);
+    const otherCount = total - 1;
+    const otherBlockH = otherCount > 0
+      ? Math.round(h * 0.018) + otherLineH * (otherCount + 1)
+      : 0;
+    const panelH = padding * 2 + titleFont + timeFont + otherBlockH;
+
+    const grad = cx.createLinearGradient(0, h - panelH * 1.25, 0, h);
     grad.addColorStop(0, 'rgba(0,0,0,0)');
     grad.addColorStop(0.4, 'rgba(0,0,0,0.7)');
-    grad.addColorStop(1, 'rgba(0,0,0,0.92)');
+    grad.addColorStop(1, 'rgba(0,0,0,0.94)');
     cx.fillStyle = grad;
-    cx.fillRect(0, h - panelH * 1.4, w, panelH * 1.4);
+    cx.fillRect(0, h - panelH * 1.25, w, panelH * 1.25);
 
-    const top = h - panelH;
+    const top = h - panelH + padding;
     cx.textBaseline = 'top';
     cx.textAlign = 'left';
+
     cx.fillStyle = '#ffd60a';
     cx.font = `900 ${titleFont}px -apple-system, "Helvetica Neue", sans-serif`;
-    const titleText = total > 1 ? `50m走 ${rank}着` : '50m走';
-    cx.fillText(titleText, padding, top);
+    cx.fillText(total > 1 ? `50m走 ${rank}着` : '50m走', padding, top);
 
     cx.fillStyle = '#ffffff';
     cx.font = `900 ${timeFont}px "SF Mono", Menlo, monospace`;
-    cx.fillText(`${time.toFixed(3)}s`, padding, top + Math.round(titleFont * 1.05));
+    cx.fillText(`${time.toFixed(3)}s`, padding, top + Math.round(titleFont * 1.0));
 
     cx.font = `500 ${dateFont}px -apple-system, "Helvetica Neue", sans-serif`;
     cx.fillStyle = 'rgba(255,255,255,0.85)';
@@ -1194,6 +1148,25 @@
     const ts = timestamp;
     const dateStr = `${ts.getFullYear()}/${String(ts.getMonth()+1).padStart(2,'0')}/${String(ts.getDate()).padStart(2,'0')} ${String(ts.getHours()).padStart(2,'0')}:${String(ts.getMinutes()).padStart(2,'0')}`;
     cx.fillText(dateStr, w - padding, top + Math.round(titleFont * 0.3));
+
+    if (otherCount > 0) {
+      cx.textAlign = 'left';
+      let yy = top + Math.round(titleFont * 1.0) + timeFont + Math.round(h * 0.018);
+      cx.fillStyle = 'rgba(255,255,255,0.55)';
+      cx.font = `600 ${Math.round(otherFont * 0.85)}px -apple-system, sans-serif`;
+      cx.fillText('他の順位', padding, yy);
+      yy += otherLineH;
+      cx.font = `bold ${otherFont}px "SF Mono", Menlo, monospace`;
+      allItems.forEach((it, idx) => {
+        const r = idx + 1;
+        if (r === rank) return;
+        cx.fillStyle = 'rgba(255,214,10,0.85)';
+        cx.fillText(`${r}着`, padding, yy);
+        cx.fillStyle = 'rgba(255,255,255,0.85)';
+        cx.fillText(`${it.time.toFixed(3)}s`, padding + Math.round(otherFont * 3), yy);
+        yy += otherLineH;
+      });
+    }
 
     return c;
   };
