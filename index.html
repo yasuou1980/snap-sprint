@@ -1,0 +1,973 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>50m走タイマー</title>
+<style>
+  :root {
+    --bg: #0a0a0a;
+    --panel: rgba(20, 20, 20, 0.85);
+    --accent: #ff3b3b;
+    --accent2: #ffd60a;
+    --ok: #30d158;
+    --text: #ffffff;
+    --dim: rgba(255, 255, 255, 0.5);
+    --border: rgba(255, 255, 255, 0.12);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+  html, body {
+    height: 100%;
+    overflow: hidden;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'SF Pro Display', -apple-system, 'Helvetica Neue', sans-serif;
+    user-select: none;
+  }
+
+  #app {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  #video, #canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  #canvas { pointer-events: none; }
+
+  /* Top status bar */
+  .top-bar {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    padding: env(safe-area-inset-top, 12px) 16px 12px;
+    background: linear-gradient(180deg, rgba(0,0,0,0.7) 0%, transparent 100%);
+    z-index: 10;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    pointer-events: none;
+  }
+
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--panel);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--border);
+    padding: 8px 14px;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+  }
+
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--dim);
+    transition: background 0.2s;
+  }
+
+  .status-dot.ready { background: var(--accent2); animation: pulse 1.5s infinite; }
+  .status-dot.armed { background: var(--accent); animation: pulse 0.8s infinite; }
+  .status-dot.running { background: var(--ok); animation: pulse 0.4s infinite; }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.6; transform: scale(1.2); }
+  }
+
+  /* Center timer display */
+  .timer-display {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 5;
+    text-align: center;
+    pointer-events: none;
+  }
+
+  .timer-value {
+    font-family: 'SF Mono', 'Menlo', monospace;
+    font-size: clamp(64px, 18vw, 140px);
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -0.04em;
+    color: var(--text);
+    text-shadow:
+      0 0 30px rgba(0, 0, 0, 0.9),
+      0 4px 20px rgba(0, 0, 0, 0.7);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .timer-value.finished {
+    color: var(--accent2);
+    text-shadow:
+      0 0 40px rgba(255, 214, 10, 0.6),
+      0 4px 20px rgba(0, 0, 0, 0.8);
+    animation: finishPulse 0.6s ease-out;
+  }
+
+  @keyframes finishPulse {
+    0% { transform: scale(1.4); opacity: 0; }
+    50% { transform: scale(1.1); opacity: 1; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+
+  .timer-label {
+    margin-top: 12px;
+    font-size: 14px;
+    font-weight: 500;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    color: var(--dim);
+    text-shadow: 0 2px 10px rgba(0,0,0,0.8);
+  }
+
+  /* Goal line indicator */
+  .goal-line {
+    position: absolute;
+    top: 15%;
+    bottom: 15%;
+    left: 50%;
+    width: 12%;
+    transform: translateX(-50%);
+    border-left: 2px dashed var(--accent2);
+    border-right: 2px dashed var(--accent2);
+    z-index: 4;
+    pointer-events: none;
+    transition: all 0.2s;
+  }
+
+  .goal-line.detecting {
+    background: rgba(48, 209, 88, 0.2);
+    border-color: var(--ok);
+    box-shadow: inset 0 0 30px rgba(48, 209, 88, 0.4);
+  }
+
+  .goal-label {
+    position: absolute;
+    top: -28px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    color: var(--accent2);
+    background: rgba(0,0,0,0.7);
+    padding: 4px 10px;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+
+  /* Bottom controls */
+  .bottom-controls {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    padding: 20px 16px calc(env(safe-area-inset-bottom, 16px) + 16px);
+    background: linear-gradient(0deg, rgba(0,0,0,0.85) 0%, transparent 100%);
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .meters {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .meter {
+    background: var(--panel);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 10px 12px;
+  }
+
+  .meter-label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    color: var(--dim);
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+
+  .meter-bar {
+    height: 6px;
+    background: rgba(255,255,255,0.08);
+    border-radius: 3px;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .meter-fill {
+    height: 100%;
+    background: var(--ok);
+    border-radius: 3px;
+    transition: width 0.05s linear, background 0.1s;
+    width: 0%;
+  }
+
+  .meter-fill.over { background: var(--accent); }
+
+  .threshold-line {
+    position: absolute;
+    top: -2px;
+    bottom: -2px;
+    width: 2px;
+    background: var(--accent2);
+  }
+
+  .button-row {
+    display: flex;
+    gap: 10px;
+  }
+
+  button {
+    flex: 1;
+    padding: 16px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    color: var(--text);
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    border-radius: 14px;
+    cursor: pointer;
+    transition: all 0.15s;
+    font-family: inherit;
+  }
+
+  button:active { transform: scale(0.97); }
+
+  button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+
+  button.primary.armed {
+    background: var(--ok);
+    border-color: var(--ok);
+  }
+
+  button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  /* Settings panel */
+  .settings {
+    position: absolute;
+    top: 60px;
+    right: 12px;
+    width: 240px;
+    background: var(--panel);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 14px;
+    z-index: 20;
+    display: none;
+    pointer-events: auto;
+  }
+
+  .settings.open { display: block; }
+
+  .settings-row {
+    margin-bottom: 14px;
+  }
+  .settings-row:last-child { margin-bottom: 0; }
+
+  .settings-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1.2px;
+    color: var(--dim);
+    text-transform: uppercase;
+    margin-bottom: 6px;
+    display: flex;
+    justify-content: space-between;
+  }
+
+  .settings-value {
+    color: var(--accent2);
+    font-family: 'SF Mono', monospace;
+  }
+
+  input[type="range"] {
+    width: 100%;
+    -webkit-appearance: none;
+    height: 4px;
+    background: rgba(255,255,255,0.15);
+    border-radius: 2px;
+    outline: none;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 18px;
+    height: 18px;
+    background: var(--accent2);
+    border-radius: 50%;
+    cursor: pointer;
+  }
+  input[type="range"]::-moz-range-thumb {
+    width: 18px;
+    height: 18px;
+    background: var(--accent2);
+    border-radius: 50%;
+    cursor: pointer;
+    border: none;
+  }
+
+  .icon-btn {
+    background: var(--panel);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--border);
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    padding: 0;
+    pointer-events: auto;
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+  }
+
+  /* History list */
+  .history {
+    position: absolute;
+    top: 60px;
+    left: 12px;
+    max-width: 200px;
+    z-index: 9;
+    pointer-events: none;
+  }
+
+  .history-item {
+    background: var(--panel);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 8px 12px;
+    margin-bottom: 6px;
+    font-family: 'SF Mono', monospace;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .history-item.best {
+    color: var(--accent2);
+    border-color: rgba(255, 214, 10, 0.4);
+  }
+
+  .history-num {
+    color: var(--dim);
+    font-size: 11px;
+    align-self: center;
+  }
+
+  /* Start screen */
+  .start-screen {
+    position: absolute;
+    inset: 0;
+    background: var(--bg);
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    text-align: center;
+  }
+
+  .start-screen.hidden { display: none; }
+
+  .logo {
+    font-size: 48px;
+    font-weight: 900;
+    letter-spacing: -0.03em;
+    margin-bottom: 8px;
+    background: linear-gradient(135deg, var(--accent2), var(--accent));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .tagline {
+    color: var(--dim);
+    font-size: 14px;
+    letter-spacing: 2px;
+    margin-bottom: 40px;
+    text-transform: uppercase;
+  }
+
+  .instructions {
+    max-width: 320px;
+    text-align: left;
+    margin-bottom: 32px;
+  }
+
+  .instruction {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 14px;
+    align-items: flex-start;
+  }
+
+  .instruction-num {
+    flex: none;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 12px;
+  }
+
+  .instruction-text {
+    font-size: 13px;
+    line-height: 1.5;
+    color: rgba(255,255,255,0.85);
+  }
+
+  .start-btn {
+    padding: 18px 48px;
+    background: var(--accent);
+    border: none;
+    border-radius: 999px;
+    color: white;
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    cursor: pointer;
+    text-transform: uppercase;
+  }
+
+  .error-msg {
+    background: rgba(255, 59, 59, 0.15);
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    padding: 12px;
+    margin-top: 16px;
+    font-size: 13px;
+    color: #ffb0b0;
+    max-width: 320px;
+    display: none;
+  }
+  .error-msg.show { display: block; }
+
+  /* Countdown overlay */
+  .countdown {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0,0,0,0.4);
+    z-index: 50;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+  .countdown.show { opacity: 1; }
+  .countdown-text {
+    font-size: 80px;
+    font-weight: 900;
+    color: var(--accent2);
+    text-shadow: 0 0 40px rgba(0,0,0,0.9);
+    animation: countdownPop 0.6s ease-out;
+  }
+  @keyframes countdownPop {
+    0% { transform: scale(0.5); opacity: 0; }
+    50% { transform: scale(1.1); opacity: 1; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <!-- Start screen -->
+  <div class="start-screen" id="startScreen">
+    <div class="logo">SPRINT</div>
+    <div class="tagline">50m Timer</div>
+    <div class="instructions">
+      <div class="instruction">
+        <div class="instruction-num">1</div>
+        <div class="instruction-text">スマホをゴール地点の真横に固定。コースが画面中央の縦帯（ゴールライン）を横切るように向ける。</div>
+      </div>
+      <div class="instruction">
+        <div class="instruction-num">2</div>
+        <div class="instruction-text">「準備」ボタンでマイクとカメラを起動。背景の動きが止まったら手拍子でスタート。</div>
+      </div>
+      <div class="instruction">
+        <div class="instruction-num">3</div>
+        <div class="instruction-text">スタート地点から走り出し、画面中央の帯を通過するとタイム確定。</div>
+      </div>
+    </div>
+    <button class="start-btn" id="enterBtn">はじめる</button>
+    <div class="error-msg" id="errorMsg"></div>
+  </div>
+
+  <!-- Camera + canvas -->
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="canvas"></canvas>
+
+  <!-- Goal line overlay -->
+  <div class="goal-line" id="goalLine">
+    <div class="goal-label">GOAL</div>
+  </div>
+
+  <!-- Top status -->
+  <div class="top-bar">
+    <div class="status-pill">
+      <div class="status-dot" id="statusDot"></div>
+      <span id="statusText">待機中</span>
+    </div>
+    <button class="icon-btn" id="settingsBtn" aria-label="settings">⚙</button>
+  </div>
+
+  <!-- Settings panel -->
+  <div class="settings" id="settingsPanel">
+    <div class="settings-row">
+      <div class="settings-label">
+        <span>音検知しきい値</span>
+        <span class="settings-value" id="audioThreshVal">0.30</span>
+      </div>
+      <input type="range" id="audioThresh" min="0.05" max="0.9" step="0.01" value="0.3">
+    </div>
+    <div class="settings-row">
+      <div class="settings-label">
+        <span>映像検知しきい値</span>
+        <span class="settings-value" id="videoThreshVal">25</span>
+      </div>
+      <input type="range" id="videoThresh" min="5" max="80" step="1" value="25">
+    </div>
+    <div class="settings-row">
+      <div class="settings-label">
+        <span>ゴール帯の幅</span>
+        <span class="settings-value" id="zoneWidthVal">12%</span>
+      </div>
+      <input type="range" id="zoneWidth" min="4" max="40" step="1" value="12">
+    </div>
+    <div class="settings-row">
+      <div class="settings-label">
+        <span>音検知の遅延補正(ms)</span>
+        <span class="settings-value" id="latencyVal">0</span>
+      </div>
+      <input type="range" id="latency" min="-200" max="200" step="10" value="0">
+    </div>
+  </div>
+
+  <!-- History -->
+  <div class="history" id="history"></div>
+
+  <!-- Big timer -->
+  <div class="timer-display">
+    <div class="timer-value" id="timerValue">0.000</div>
+    <div class="timer-label" id="timerLabel">SECONDS</div>
+  </div>
+
+  <!-- Countdown overlay -->
+  <div class="countdown" id="countdown">
+    <div class="countdown-text" id="countdownText"></div>
+  </div>
+
+  <!-- Bottom controls -->
+  <div class="bottom-controls">
+    <div class="meters">
+      <div class="meter">
+        <div class="meter-label">🎤 音量</div>
+        <div class="meter-bar">
+          <div class="meter-fill" id="audioMeter"></div>
+          <div class="threshold-line" id="audioThreshLine" style="left: 30%;"></div>
+        </div>
+      </div>
+      <div class="meter">
+        <div class="meter-label">📹 映像変化</div>
+        <div class="meter-bar">
+          <div class="meter-fill" id="videoMeter"></div>
+          <div class="threshold-line" id="videoThreshLine" style="left: 31%;"></div>
+        </div>
+      </div>
+    </div>
+    <div class="button-row">
+      <button id="armBtn" class="primary">準備</button>
+      <button id="resetBtn">リセット</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  // DOM
+  const $ = id => document.getElementById(id);
+  const startScreen = $('startScreen');
+  const enterBtn = $('enterBtn');
+  const errorMsg = $('errorMsg');
+  const video = $('video');
+  const canvas = $('canvas');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const statusDot = $('statusDot');
+  const statusText = $('statusText');
+  const timerValue = $('timerValue');
+  const timerLabel = $('timerLabel');
+  const goalLine = $('goalLine');
+  const armBtn = $('armBtn');
+  const resetBtn = $('resetBtn');
+  const audioMeter = $('audioMeter');
+  const videoMeter = $('videoMeter');
+  const audioThreshLine = $('audioThreshLine');
+  const videoThreshLine = $('videoThreshLine');
+  const settingsBtn = $('settingsBtn');
+  const settingsPanel = $('settingsPanel');
+  const audioThresh = $('audioThresh');
+  const videoThresh = $('videoThresh');
+  const zoneWidth = $('zoneWidth');
+  const latency = $('latency');
+  const audioThreshVal = $('audioThreshVal');
+  const videoThreshVal = $('videoThreshVal');
+  const zoneWidthVal = $('zoneWidthVal');
+  const latencyVal = $('latencyVal');
+  const historyEl = $('history');
+  const countdown = $('countdown');
+  const countdownText = $('countdownText');
+
+  // State
+  const state = {
+    mode: 'idle', // idle | armed | running | finished
+    startTime: 0,
+    finishTime: 0,
+    history: [],
+    rafId: null,
+    audioCtx: null,
+    analyser: null,
+    audioData: null,
+    audioStream: null,
+    videoStream: null,
+    prevFrame: null,
+    settleAfter: 0,
+    lastVideoChange: 0,
+  };
+
+  // Settings
+  const cfg = {
+    audioThresh: 0.30,
+    videoThresh: 25,
+    zoneWidth: 12,
+    latency: 0,
+  };
+
+  const updateThresholdLines = () => {
+    audioThreshLine.style.left = (cfg.audioThresh * 100) + '%';
+    videoThreshLine.style.left = (Math.min(cfg.videoThresh / 80 * 100, 100)) + '%';
+    goalLine.style.width = cfg.zoneWidth + '%';
+  };
+
+  audioThresh.addEventListener('input', e => {
+    cfg.audioThresh = parseFloat(e.target.value);
+    audioThreshVal.textContent = cfg.audioThresh.toFixed(2);
+    updateThresholdLines();
+  });
+  videoThresh.addEventListener('input', e => {
+    cfg.videoThresh = parseFloat(e.target.value);
+    videoThreshVal.textContent = cfg.videoThresh;
+    updateThresholdLines();
+  });
+  zoneWidth.addEventListener('input', e => {
+    cfg.zoneWidth = parseFloat(e.target.value);
+    zoneWidthVal.textContent = cfg.zoneWidth + '%';
+    updateThresholdLines();
+  });
+  latency.addEventListener('input', e => {
+    cfg.latency = parseFloat(e.target.value);
+    latencyVal.textContent = cfg.latency;
+  });
+
+  settingsBtn.addEventListener('click', () => {
+    settingsPanel.classList.toggle('open');
+  });
+
+  enterBtn.addEventListener('click', async () => {
+    enterBtn.textContent = '起動中…';
+    enterBtn.disabled = true;
+    errorMsg.classList.remove('show');
+    try {
+      state.videoStream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        },
+        audio: false,
+      });
+      video.srcObject = state.videoStream;
+      await video.play();
+
+      state.audioStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        }
+      });
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      state.audioCtx = new AudioCtx();
+      const source = state.audioCtx.createMediaStreamSource(state.audioStream);
+      state.analyser = state.audioCtx.createAnalyser();
+      state.analyser.fftSize = 1024;
+      state.analyser.smoothingTimeConstant = 0;
+      source.connect(state.analyser);
+      state.audioData = new Uint8Array(state.analyser.fftSize);
+
+      resizeCanvas();
+      window.addEventListener('resize', resizeCanvas);
+
+      startScreen.classList.add('hidden');
+      setStatus('idle');
+      loop();
+    } catch (e) {
+      console.error(e);
+      errorMsg.textContent = 'カメラ・マイクの許可が必要です。ブラウザ設定で許可してリロードしてください。 ' + (e.message || '');
+      errorMsg.classList.add('show');
+      enterBtn.disabled = false;
+      enterBtn.textContent = 'はじめる';
+    }
+  });
+
+  const resizeCanvas = () => {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    state.prevFrame = null;
+  };
+
+  const setStatus = (mode) => {
+    state.mode = mode;
+    statusDot.className = 'status-dot';
+    armBtn.classList.remove('armed');
+    if (mode === 'idle') {
+      statusText.textContent = '待機中';
+      armBtn.textContent = '準備';
+      armBtn.classList.add('primary');
+      timerLabel.textContent = 'SECONDS';
+      timerValue.classList.remove('finished');
+    } else if (mode === 'armed') {
+      statusDot.classList.add('armed');
+      statusText.textContent = '手拍子待ち…';
+      armBtn.textContent = 'キャンセル';
+      armBtn.classList.add('armed');
+      timerLabel.textContent = 'WAITING';
+    } else if (mode === 'running') {
+      statusDot.classList.add('running');
+      statusText.textContent = '計測中';
+      armBtn.textContent = '中断';
+      timerLabel.textContent = 'RUNNING';
+    } else if (mode === 'finished') {
+      statusDot.classList.add('ready');
+      statusText.textContent = '完走';
+      armBtn.textContent = '次の試行';
+      armBtn.classList.add('primary');
+      timerLabel.textContent = 'FINISHED';
+      timerValue.classList.add('finished');
+    }
+  };
+
+  const computeAudioLevel = () => {
+    state.analyser.getByteTimeDomainData(state.audioData);
+    let peak = 0;
+    for (let i = 0; i < state.audioData.length; i++) {
+      const v = Math.abs(state.audioData[i] - 128) / 128;
+      if (v > peak) peak = v;
+    }
+    return peak;
+  };
+
+  const computeVideoChange = () => {
+    if (!video.videoWidth) return 0;
+    const w = canvas.width, h = canvas.height;
+
+    const zonePxWidth = w * cfg.zoneWidth / 100;
+    const zoneLeft = (w - zonePxWidth) / 2;
+    const zoneTop = h * 0.15;
+    const zoneHeight = h * 0.7;
+
+    const vw = video.videoWidth, vh = video.videoHeight;
+    const scale = Math.max(w / vw, h / vh);
+    const drawW = vw * scale, drawH = vh * scale;
+    const offX = (w - drawW) / 2, offY = (h - drawH) / 2;
+
+    const srcX = (zoneLeft - offX) / scale;
+    const srcY = (zoneTop - offY) / scale;
+    const srcW = zonePxWidth / scale;
+    const srcH = zoneHeight / scale;
+
+    const sw = 32, sh = 64;
+    ctx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, sw, sh);
+    const frame = ctx.getImageData(0, 0, sw, sh);
+
+    if (!state.prevFrame || state.prevFrame.data.length !== frame.data.length) {
+      state.prevFrame = frame;
+      return 0;
+    }
+
+    let diffSum = 0;
+    const len = frame.data.length;
+    const prev = state.prevFrame.data;
+    const cur = frame.data;
+    for (let i = 0; i < len; i += 4) {
+      const dr = Math.abs(cur[i] - prev[i]);
+      const dg = Math.abs(cur[i+1] - prev[i+1]);
+      const db = Math.abs(cur[i+2] - prev[i+2]);
+      diffSum += (dr + dg + db) / 3;
+    }
+    state.prevFrame = frame;
+    const avgDiff = diffSum / (len / 4);
+
+    ctx.clearRect(0, 0, sw, sh);
+
+    return avgDiff;
+  };
+
+  const loop = () => {
+    state.rafId = requestAnimationFrame(loop);
+    const now = performance.now();
+
+    const audioLevel = state.analyser ? computeAudioLevel() : 0;
+    audioMeter.style.width = Math.min(audioLevel * 100, 100) + '%';
+    audioMeter.classList.toggle('over', audioLevel >= cfg.audioThresh);
+
+    const videoDiff = computeVideoChange();
+    const videoPct = Math.min(videoDiff / 80 * 100, 100);
+    videoMeter.style.width = videoPct + '%';
+    videoMeter.classList.toggle('over', videoDiff >= cfg.videoThresh);
+
+    if (videoDiff >= cfg.videoThresh && state.mode === 'running') {
+      goalLine.classList.add('detecting');
+      state.lastVideoChange = now;
+    } else if (now - state.lastVideoChange > 200) {
+      goalLine.classList.remove('detecting');
+    }
+
+    if (state.mode === 'armed') {
+      if (audioLevel >= cfg.audioThresh && now > state.settleAfter) {
+        state.startTime = now + cfg.latency;
+        state.settleAfter = now + 800;
+        setStatus('running');
+        showCountdown('GO!');
+      }
+    } else if (state.mode === 'running') {
+      const elapsed = (now - state.startTime) / 1000;
+      timerValue.textContent = elapsed.toFixed(3);
+
+      if (videoDiff >= cfg.videoThresh && now > state.settleAfter && elapsed > 1.0) {
+        state.finishTime = now;
+        finishRun(elapsed);
+      }
+    }
+  };
+
+  const showCountdown = (text) => {
+    countdownText.textContent = text;
+    countdown.classList.add('show');
+    setTimeout(() => countdown.classList.remove('show'), 500);
+  };
+
+  const finishRun = (seconds) => {
+    setStatus('finished');
+    timerValue.textContent = seconds.toFixed(3);
+    addToHistory(seconds);
+    if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+  };
+
+  const addToHistory = (seconds) => {
+    state.history.unshift({ time: seconds });
+    state.history = state.history.slice(0, 5);
+    const best = Math.min(...state.history.map(h => h.time));
+    state.history.forEach(h => h.isBest = (h.time === best));
+    renderHistory();
+  };
+
+  const renderHistory = () => {
+    historyEl.innerHTML = '';
+    state.history.forEach((h, i) => {
+      const item = document.createElement('div');
+      item.className = 'history-item' + (h.isBest ? ' best' : '');
+      item.innerHTML = `<span class="history-num">#${state.history.length - i}</span><span>${h.time.toFixed(3)}s</span>`;
+      historyEl.appendChild(item);
+    });
+  };
+
+  armBtn.addEventListener('click', () => {
+    if (state.mode === 'idle' || state.mode === 'finished') {
+      timerValue.textContent = '0.000';
+      timerValue.classList.remove('finished');
+      state.settleAfter = performance.now() + 500;
+      state.prevFrame = null;
+      setStatus('armed');
+    } else if (state.mode === 'armed' || state.mode === 'running') {
+      timerValue.textContent = '0.000';
+      timerValue.classList.remove('finished');
+      setStatus('idle');
+    }
+  });
+
+  resetBtn.addEventListener('click', () => {
+    state.history = [];
+    renderHistory();
+    timerValue.textContent = '0.000';
+    timerValue.classList.remove('finished');
+    setStatus('idle');
+  });
+
+  let wakeLock = null;
+  const acquireWakeLock = async () => {
+    try {
+      if ('wakeLock' in navigator) {
+        wakeLock = await navigator.wakeLock.request('screen');
+      }
+    } catch (e) {
+      console.log('wake lock not available');
+    }
+  };
+  document.addEventListener('visibilitychange', () => {
+    if (wakeLock && document.visibilityState === 'visible') acquireWakeLock();
+  });
+
+  enterBtn.addEventListener('click', () => acquireWakeLock(), { once: true });
+
+  updateThresholdLines();
+})();
+</script>
+</body>
+</html>
