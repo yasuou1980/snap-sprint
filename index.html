@@ -394,6 +394,66 @@
     align-self: center;
   }
 
+  .history-race {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+  }
+
+  .history-race .race-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .history-race .race-rank {
+    color: var(--dim);
+    font-size: 11px;
+  }
+
+  /* Live race results panel */
+  .results-panel {
+    position: absolute;
+    top: calc(50% + 100px);
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 6;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    pointer-events: none;
+    text-align: center;
+    max-width: 80vw;
+  }
+
+  .result-row {
+    background: var(--panel);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 4px 12px;
+    font-family: 'SF Mono', 'Menlo', monospace;
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: var(--text);
+    display: inline-flex;
+    gap: 10px;
+    justify-content: center;
+    animation: resultPop 0.3s ease-out;
+  }
+
+  .result-row .rank {
+    color: var(--accent2);
+  }
+
+  @keyframes resultPop {
+    0% { transform: scale(0.8); opacity: 0; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+
   /* Start screen */
   .start-screen {
     position: absolute;
@@ -588,6 +648,20 @@
       </div>
       <input type="range" id="latency" min="-200" max="200" step="10" value="0">
     </div>
+    <div class="settings-row">
+      <div class="settings-label">
+        <span>人数</span>
+        <span class="settings-value" id="runnerCountVal">1</span>
+      </div>
+      <input type="range" id="runnerCount" min="1" max="8" step="1" value="1">
+    </div>
+    <div class="settings-row">
+      <div class="settings-label">
+        <span>通過後ロック(ms)</span>
+        <span class="settings-value" id="refractoryVal">500</span>
+      </div>
+      <input type="range" id="refractory" min="200" max="1500" step="50" value="500">
+    </div>
   </div>
 
   <!-- History -->
@@ -598,6 +672,9 @@
     <div class="timer-value" id="timerValue">0.000</div>
     <div class="timer-label" id="timerLabel">SECONDS</div>
   </div>
+
+  <!-- Live results during multi-runner race -->
+  <div class="results-panel" id="resultsPanel"></div>
 
   <!-- Countdown overlay -->
   <div class="countdown" id="countdown">
@@ -660,6 +737,11 @@
   const videoThreshVal = $('videoThreshVal');
   const zoneWidthVal = $('zoneWidthVal');
   const latencyVal = $('latencyVal');
+  const runnerCount = $('runnerCount');
+  const refractory = $('refractory');
+  const runnerCountVal = $('runnerCountVal');
+  const refractoryVal = $('refractoryVal');
+  const resultsPanel = $('resultsPanel');
   const historyEl = $('history');
   const countdown = $('countdown');
   const countdownText = $('countdownText');
@@ -669,7 +751,8 @@
     mode: 'idle', // idle | armed | running | finished
     startTime: 0,
     finishTime: 0,
-    history: [],
+    currentRace: [], // finish times for the in-progress race
+    history: [], // array of races, each is { times: [...] }
     rafId: null,
     audioCtx: null,
     analyser: null,
@@ -687,6 +770,8 @@
     videoThresh: 25,
     zoneWidth: 12,
     latency: 0,
+    runnerCount: 1,
+    refractoryMs: 500,
   };
 
   const updateThresholdLines = () => {
@@ -713,6 +798,14 @@
   latency.addEventListener('input', e => {
     cfg.latency = parseFloat(e.target.value);
     latencyVal.textContent = cfg.latency;
+  });
+  runnerCount.addEventListener('input', e => {
+    cfg.runnerCount = parseInt(e.target.value, 10);
+    runnerCountVal.textContent = cfg.runnerCount;
+  });
+  refractory.addEventListener('input', e => {
+    cfg.refractoryMs = parseInt(e.target.value, 10);
+    refractoryVal.textContent = cfg.refractoryMs;
   });
 
   settingsBtn.addEventListener('click', () => {
@@ -891,8 +984,14 @@
       timerValue.textContent = elapsed.toFixed(3);
 
       if (videoDiff >= cfg.videoThresh && now > state.settleAfter && elapsed > 1.0) {
-        state.finishTime = now;
-        finishRun(elapsed);
+        state.currentRace.push(elapsed);
+        state.settleAfter = now + cfg.refractoryMs;
+        renderCurrentRace();
+        if (navigator.vibrate) navigator.vibrate(40);
+        if (state.currentRace.length >= cfg.runnerCount) {
+          state.finishTime = now;
+          finishRun();
+        }
       }
     }
   };
@@ -903,27 +1002,45 @@
     setTimeout(() => countdown.classList.remove('show'), 500);
   };
 
-  const finishRun = (seconds) => {
+  const finishRun = () => {
     setStatus('finished');
-    timerValue.textContent = seconds.toFixed(3);
-    addToHistory(seconds);
+    const fastest = Math.min(...state.currentRace);
+    timerValue.textContent = fastest.toFixed(3);
+    addRaceToHistory(state.currentRace.slice());
     if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
   };
 
-  const addToHistory = (seconds) => {
-    state.history.unshift({ time: seconds });
+  const addRaceToHistory = (times) => {
+    state.history.unshift({ times });
     state.history = state.history.slice(0, 5);
-    const best = Math.min(...state.history.map(h => h.time));
-    state.history.forEach(h => h.isBest = (h.time === best));
     renderHistory();
+  };
+
+  const renderCurrentRace = () => {
+    resultsPanel.innerHTML = '';
+    if (cfg.runnerCount <= 1) return;
+    state.currentRace.forEach((t, idx) => {
+      const row = document.createElement('div');
+      row.className = 'result-row';
+      row.innerHTML = `<span class="rank">${idx + 1}着</span><span>${t.toFixed(3)}s</span>`;
+      resultsPanel.appendChild(row);
+    });
   };
 
   const renderHistory = () => {
     historyEl.innerHTML = '';
-    state.history.forEach((h, i) => {
+    state.history.forEach((race, i) => {
       const item = document.createElement('div');
-      item.className = 'history-item' + (h.isBest ? ' best' : '');
-      item.innerHTML = `<span class="history-num">#${state.history.length - i}</span><span>${h.time.toFixed(3)}s</span>`;
+      item.className = 'history-item';
+      const num = `<span class="history-num">#${state.history.length - i}</span>`;
+      if (race.times.length === 1) {
+        item.innerHTML = `${num}<span>${race.times[0].toFixed(3)}s</span>`;
+      } else {
+        const rows = race.times.map((t, idx) =>
+          `<div class="race-row"><span class="race-rank">${idx + 1}着</span><span>${t.toFixed(3)}s</span></div>`
+        ).join('');
+        item.innerHTML = `${num}<div class="history-race">${rows}</div>`;
+      }
       historyEl.appendChild(item);
     });
   };
@@ -932,19 +1049,25 @@
     if (state.mode === 'idle' || state.mode === 'finished') {
       timerValue.textContent = '0.000';
       timerValue.classList.remove('finished');
+      state.currentRace = [];
+      renderCurrentRace();
       state.settleAfter = performance.now() + 500;
       state.prevFrame = null;
       setStatus('armed');
     } else if (state.mode === 'armed' || state.mode === 'running') {
       timerValue.textContent = '0.000';
       timerValue.classList.remove('finished');
+      state.currentRace = [];
+      renderCurrentRace();
       setStatus('idle');
     }
   });
 
   resetBtn.addEventListener('click', () => {
     state.history = [];
+    state.currentRace = [];
     renderHistory();
+    renderCurrentRace();
     timerValue.textContent = '0.000';
     timerValue.classList.remove('finished');
     setStatus('idle');
