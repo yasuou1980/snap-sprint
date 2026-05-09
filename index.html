@@ -99,6 +99,7 @@
     text-align: center;
     pointer-events: none;
   }
+  .timer-display.dim { visibility: hidden; }
 
   .timer-value {
     font-family: 'SF Mono', 'Menlo', monospace;
@@ -574,6 +575,51 @@
     50% { transform: scale(1.1); opacity: 1; }
     100% { transform: scale(1); opacity: 1; }
   }
+
+  /* Big full-screen status overlay (idle / armed) */
+  .big-status {
+    position: absolute;
+    inset: 0;
+    z-index: 7;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 18px;
+    pointer-events: none;
+    background: radial-gradient(ellipse at center, rgba(0,0,0,0.25) 0%, rgba(0,0,0,0.7) 100%);
+    text-align: center;
+    padding: 24px;
+  }
+  .big-status.show { display: flex; }
+  .big-status-title {
+    font-size: clamp(64px, 22vw, 200px);
+    font-weight: 900;
+    letter-spacing: -0.04em;
+    line-height: 0.95;
+    color: var(--text);
+    text-shadow:
+      0 0 40px rgba(0, 0, 0, 0.95),
+      0 4px 30px rgba(0, 0, 0, 0.9);
+  }
+  .big-status.idle .big-status-title { color: var(--accent2); }
+  .big-status.armed .big-status-title {
+    color: var(--accent);
+    animation: bigPulse 1.2s ease-in-out infinite;
+  }
+  .big-status-sub {
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 2px;
+    color: rgba(255,255,255,0.85);
+    text-shadow: 0 2px 10px rgba(0,0,0,0.9);
+    text-transform: uppercase;
+    max-width: 80vw;
+  }
+  @keyframes bigPulse {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.06); opacity: 0.75; }
+  }
 </style>
 </head>
 <body>
@@ -676,6 +722,12 @@
   <!-- Live results during multi-runner race -->
   <div class="results-panel" id="resultsPanel"></div>
 
+  <!-- Big full-screen status (idle / armed) -->
+  <div class="big-status" id="bigStatus">
+    <div class="big-status-title" id="bigStatusTitle"></div>
+    <div class="big-status-sub" id="bigStatusSub"></div>
+  </div>
+
   <!-- Countdown overlay -->
   <div class="countdown" id="countdown">
     <div class="countdown-text" id="countdownText"></div>
@@ -701,6 +753,7 @@
     </div>
     <div class="button-row">
       <button id="armBtn" class="primary">準備</button>
+      <button id="manualStartBtn">スタート</button>
       <button id="resetBtn">リセット</button>
     </div>
   </div>
@@ -742,6 +795,11 @@
   const runnerCountVal = $('runnerCountVal');
   const refractoryVal = $('refractoryVal');
   const resultsPanel = $('resultsPanel');
+  const timerDisplay = document.querySelector('.timer-display');
+  const bigStatus = $('bigStatus');
+  const bigStatusTitle = $('bigStatusTitle');
+  const bigStatusSub = $('bigStatusSub');
+  const manualStartBtn = $('manualStartBtn');
   const historyEl = $('history');
   const countdown = $('countdown');
   const countdownText = $('countdownText');
@@ -869,18 +927,26 @@
     state.mode = mode;
     statusDot.className = 'status-dot';
     armBtn.classList.remove('armed');
+    bigStatus.className = 'big-status';
+    timerDisplay.classList.toggle('dim', mode === 'idle' || mode === 'armed');
     if (mode === 'idle') {
       statusText.textContent = '待機中';
       armBtn.textContent = '準備';
       armBtn.classList.add('primary');
       timerLabel.textContent = 'SECONDS';
       timerValue.classList.remove('finished');
+      bigStatusTitle.textContent = '待機中';
+      bigStatusSub.textContent = '準備で手拍子検知 ／ スタートで手動開始';
+      bigStatus.classList.add('show', 'idle');
     } else if (mode === 'armed') {
       statusDot.classList.add('armed');
       statusText.textContent = '手拍子待ち…';
       armBtn.textContent = 'キャンセル';
       armBtn.classList.add('armed');
       timerLabel.textContent = 'WAITING';
+      bigStatusTitle.textContent = '手拍子待ち';
+      bigStatusSub.textContent = '音で自動 ／ スタートで強制';
+      bigStatus.classList.add('show', 'armed');
     } else if (mode === 'running') {
       statusDot.classList.add('running');
       statusText.textContent = '計測中';
@@ -1071,6 +1137,17 @@
     timerValue.textContent = '0.000';
     timerValue.classList.remove('finished');
     setStatus('idle');
+  });
+
+  manualStartBtn.addEventListener('click', () => {
+    state.currentRace = [];
+    renderCurrentRace();
+    timerValue.classList.remove('finished');
+    state.startTime = performance.now();
+    state.settleAfter = state.startTime + 800;
+    state.prevFrame = null;
+    setStatus('running');
+    showCountdown('GO!');
   });
 
   let wakeLock = null;
